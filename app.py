@@ -29,7 +29,7 @@ h1{font-size:15px;color:#00c8f0}
 #modal-wrap{flex:1;display:flex;align-items:center;justify-content:center;overflow:hidden;padding:8px}
 #modal-img{max-width:100%;max-height:100%;object-fit:contain}
 </style></head><body>
-<header><h1>Posmos CS 전체 모니터</h1><span id="status">연결 중...</span></header>
+<header><span id="status">연결 중...</span></header>
 <div class="grid" id="grid"></div>
 <div id="modal">
   <div id="modal-header">

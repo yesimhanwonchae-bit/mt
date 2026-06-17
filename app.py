@@ -9,7 +9,7 @@ senders: dict = {}   # client_id -> WebSocket
 viewers: set = set() # viewer WebSockets
 
 VIEWER_HTML = """<!DOCTYPE html><html><head>
-<meta charset="utf-8"><title>CS 전체 모니터</title>
+<meta charset="utf-8"><title>Why So Serious</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{background:#111;color:#eee;font-family:sans-serif;min-height:100vh}

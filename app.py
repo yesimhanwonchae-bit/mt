@@ -36,7 +36,7 @@ h1{font-size:15px;color:#00c8f0}
 #modal-close{margin-left:auto;background:#444;color:#eee;border:none;padding:4px 14px;border-radius:4px;cursor:pointer;font-size:13px}
 #modal-wrap{flex:1;overflow:hidden;position:relative;cursor:grab;touch-action:none}
 #modal-wrap.dragging{cursor:grabbing}
-#modal-img{position:absolute;top:0;left:0;transform-origin:top left;image-rendering:auto;max-width:none;will-change:transform}
+#modal-img{position:absolute;top:0;left:0;transform-origin:top left;image-rendering:high-quality;image-rendering:-webkit-optimize-contrast;max-width:none;will-change:transform}
 </style></head><body>
 <header>
   <h1>Why So Serious</h1>
@@ -93,7 +93,6 @@ function fitModal(){
 }
 function applyModal(){
   mImg.style.transform='translate('+mTx+'px,'+mTy+'px) scale('+mScale+')';
-  mImg.style.imageRendering=mScale>=1?'pixelated':'auto';
 }
 function openModal(id){
   focused=id;mScale=1;mTx=0;mTy=0;mFirstFrame=true;

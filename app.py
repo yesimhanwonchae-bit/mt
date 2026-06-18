@@ -27,7 +27,9 @@ h1{font-size:15px;color:#00c8f0}
 .card-time{font-size:10px;color:#556}
 .card-dot{width:7px;height:7px;border-radius:50%;background:#22c55e;flex-shrink:0;margin-left:6px}
 .card.offline .card-dot{background:#555}
-.card canvas{width:100%;display:block;image-rendering:auto;image-rendering:-webkit-optimize-contrast;image-rendering:high-quality}
+.card-img-wrap{position:relative;width:100%;overflow:hidden;line-height:0}
+.card-img-wrap img{width:100%;display:block;position:absolute;top:0;left:0;image-rendering:auto;image-rendering:-webkit-optimize-contrast}
+.card-img-wrap img.active{position:relative}
 #modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.95);z-index:999;flex-direction:column}
 #modal.open{display:flex}
 #modal-header{background:#1e2538;padding:10px 16px;display:flex;align-items:center;gap:12px;flex-shrink:0}
@@ -36,7 +38,7 @@ h1{font-size:15px;color:#00c8f0}
 #modal-close{margin-left:auto;background:#444;color:#eee;border:none;padding:4px 14px;border-radius:4px;cursor:pointer;font-size:13px}
 #modal-wrap{flex:1;overflow:hidden;position:relative;cursor:grab;touch-action:none}
 #modal-wrap.dragging{cursor:grabbing}
-#modal-canvas{position:absolute;top:0;left:0;transform-origin:top left;image-rendering:auto;max-width:none;will-change:transform}
+#modal-img{position:absolute;top:0;left:0;transform-origin:top left;image-rendering:auto;max-width:none;will-change:transform}
 </style></head><body>
 <header>
   <h1>Why So Serious</h1>
@@ -49,11 +51,11 @@ h1{font-size:15px;color:#00c8f0}
     <span id="modal-hint">휠: 확대 | 드래그: 이동 | 더블탭: 초기화 | ESC: 닫기</span>
     <button id="modal-close" onclick="closeModal()">닫기 ✕</button>
   </div>
-  <div id="modal-wrap"><canvas id="modal-canvas"></canvas></div>
+  <div id="modal-wrap"><img id="modal-img"></div>
 </div>
 <script>
 var cards={}, lastSeen={}, focused=null, pcCount=0;
-// cards[id] = {canvas, ctx, bmp} — canvas 기반으로 번쩍임 제거
+// cards[id] = {a, b, cur} — 더블버퍼링 img로 번쩍임 제거
 
 // ── 오프라인 감지
 setInterval(function(){
@@ -79,21 +81,21 @@ function insertCard(el,id){
   else grid.appendChild(el);
 }
 
-// ── 모달 캔버스
+// ── 모달
 var mScale=1,mTx=0,mTy=0,mDrag=false,mOx,mOy,pinchDist=0;
-var mCanvas=document.getElementById('modal-canvas');
-var mCtx=mCanvas.getContext('2d');mCtx.imageSmoothingEnabled=true;mCtx.imageSmoothingQuality='high';
-var mBmp=null, mFirstFrame=true;
+var mImg=document.getElementById('modal-img');
+var mBack=new Image(); // 백버퍼
+var mFirstFrame=true;
 
 function fitModal(){
   var wrap=document.getElementById('modal-wrap');
   var ww=wrap.clientWidth,wh=wrap.clientHeight;
-  var iw=mCanvas.width||ww,ih=mCanvas.height||wh;
+  var iw=mImg.naturalWidth||ww,ih=mImg.naturalHeight||wh;
   mScale=Math.min(ww/iw,wh/ih);mTx=0;mTy=0;applyModal();
 }
 function applyModal(){
-  mCanvas.style.transform='translate('+mTx+'px,'+mTy+'px) scale('+mScale+')';
-  mCanvas.style.imageRendering=mScale>=1?'pixelated':'auto';
+  mImg.style.transform='translate('+mTx+'px,'+mTy+'px) scale('+mScale+')';
+  mImg.style.imageRendering=mScale>=1?'pixelated':'auto';
 }
 function openModal(id){
   focused=id;mScale=1;mTx=0;mTy=0;mFirstFrame=true;
@@ -103,7 +105,7 @@ function openModal(id){
 function closeModal(){
   focused=null;
   document.getElementById('modal').classList.remove('open');
-  mCtx.clearRect(0,0,mCanvas.width,mCanvas.height);
+  mImg.src=''; mBack.src='';
 }
 var mw=document.getElementById('modal-wrap');
 mw.addEventListener('wheel',function(e){
@@ -137,19 +139,17 @@ mw.addEventListener('touchmove',function(e){
 mw.addEventListener('touchend',function(e){if(e.touches.length===0)mDrag=false;},{passive:false});
 document.addEventListener('keydown',function(e){if(e.key==='Escape')closeModal();});
 
-// ── 프레임을 canvas에 그리기 (번쩍임 없음)
-function setCtxQuality(ctx){
-  ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality='high';
-}
-function drawFrame(jpeg, canvas, ctx) {
-  createImageBitmap(new Blob([jpeg],{type:'image/jpeg'})).then(function(bmp){
-    if(canvas.width!==bmp.width||canvas.height!==bmp.height){
-      canvas.width=bmp.width; canvas.height=bmp.height;
-      setCtxQuality(ctx);
-    }
-    ctx.drawImage(bmp,0,0);
-    bmp.close();
-  });
+// ── 더블버퍼링 img 업데이트
+function updateCard(jpeg, card){
+  var url=URL.createObjectURL(new Blob([jpeg],{type:'image/jpeg'}));
+  card.back.onload=function(){
+    var oldUrl=card.front._url;
+    card.front.src=card.back.src;
+    card.front._url=card.back.src;
+    card.back.src='';
+    if(oldUrl) URL.revokeObjectURL(oldUrl);
+  };
+  card.back.src=url;
 }
 
 // ── WebSocket
@@ -172,27 +172,28 @@ function connect(){
       var d=document.createElement('div');
       d.className='card';d.id='card_'+id;d.dataset.id=id;
       d.onclick=function(){openModal(id);};
-      var cv=document.createElement('canvas');
-      cv.id='cv_'+id;
+      var wrap=document.createElement('div');wrap.className='card-img-wrap';
+      var imgA=new Image();imgA.className='active';
+      var imgB=new Image();
+      wrap.appendChild(imgA);
       d.innerHTML='<div class="card-header"><span class="card-name">'+id+'</span><span class="card-time">--:--:--</span><span class="card-dot"></span></div>';
-      d.appendChild(cv);
+      d.appendChild(wrap);
       insertCard(d,id);
-      var cx2=cv.getContext('2d');cx2.imageSmoothingEnabled=true;cx2.imageSmoothingQuality='high';
-      cards[id]={canvas:cv, ctx:cx2};
+      cards[id]={front:imgA, back:imgB};
     }
     var th=document.querySelector('#card_'+id+' .card-time');
     if(th) th.textContent=timeStr();
-    var c=cards[id];
-    drawFrame(jpeg, c.canvas, c.ctx);
+    updateCard(jpeg, cards[id]);
     if(focused===id){
-      createImageBitmap(new Blob([jpeg],{type:'image/jpeg'})).then(function(bmp){
-        if(mCanvas.width!==bmp.width||mCanvas.height!==bmp.height){
-          mCanvas.width=bmp.width; mCanvas.height=bmp.height;
-          setCtxQuality(mCtx);
-          if(mFirstFrame){mFirstFrame=false;fitModal();}
-        }
-        mCtx.drawImage(bmp,0,0); bmp.close();
-      });
+      var url2=URL.createObjectURL(new Blob([jpeg],{type:'image/jpeg'}));
+      mBack.onload=function(){
+        var oldUrl=mImg._url;
+        mImg.src=mBack.src; mImg._url=mBack.src;
+        mBack.src='';
+        if(oldUrl) URL.revokeObjectURL(oldUrl);
+        if(mFirstFrame){mFirstFrame=false;fitModal();}
+      };
+      mBack.src=url2;
     }
   };
   ws.onclose=function(){

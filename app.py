@@ -82,7 +82,7 @@ function insertCard(el,id){
 // ── 모달 캔버스
 var mScale=1,mTx=0,mTy=0,mDrag=false,mOx,mOy,pinchDist=0;
 var mCanvas=document.getElementById('modal-canvas');
-var mCtx=mCanvas.getContext('2d');
+var mCtx=mCanvas.getContext('2d');mCtx.imageSmoothingEnabled=true;mCtx.imageSmoothingQuality='high';
 var mBmp=null, mFirstFrame=true;
 
 function fitModal(){
@@ -173,7 +173,8 @@ function connect(){
       d.innerHTML='<div class="card-header"><span class="card-name">'+id+'</span><span class="card-time">--:--:--</span><span class="card-dot"></span></div>';
       d.appendChild(cv);
       insertCard(d,id);
-      cards[id]={canvas:cv, ctx:cv.getContext('2d')};
+      var cx2=cv.getContext('2d');cx2.imageSmoothingEnabled=true;cx2.imageSmoothingQuality='high';
+      cards[id]={canvas:cv, ctx:cx2};
     }
     var th=document.querySelector('#card_'+id+' .card-time');
     if(th) th.textContent=timeStr();

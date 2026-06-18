@@ -27,7 +27,7 @@ h1{font-size:15px;color:#00c8f0}
 .card-time{font-size:10px;color:#556}
 .card-dot{width:7px;height:7px;border-radius:50%;background:#22c55e;flex-shrink:0;margin-left:6px}
 .card.offline .card-dot{background:#555}
-.card img{width:100%;display:block}
+.card img{width:100%;display:block;image-rendering:auto;image-rendering:-webkit-optimize-contrast}
 #modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.95);z-index:999;flex-direction:column}
 #modal.open{display:flex}
 #modal-header{background:#1e2538;padding:10px 16px;display:flex;align-items:center;gap:12px;flex-shrink:0}
@@ -36,7 +36,7 @@ h1{font-size:15px;color:#00c8f0}
 #modal-close{margin-left:auto;background:#444;color:#eee;border:none;padding:4px 14px;border-radius:4px;cursor:pointer;font-size:13px}
 #modal-wrap{flex:1;overflow:hidden;position:relative;cursor:grab;touch-action:none}
 #modal-wrap.dragging{cursor:grabbing}
-#modal-img{position:absolute;top:0;left:0;transform-origin:top left;image-rendering:pixelated;max-width:none}
+#modal-img{position:absolute;top:0;left:0;transform-origin:top left;image-rendering:auto;max-width:none;will-change:transform}
 </style></head><body>
 <header>
   <h1>Why So Serious</h1>
@@ -96,7 +96,9 @@ function fitModal(){
   mScale=Math.min(ww/iw,wh/ih);mTx=0;mTy=0;applyModal();
 }
 function applyModal(){
-  document.getElementById('modal-img').style.transform='translate('+mTx+'px,'+mTy+'px) scale('+mScale+')';
+  var img=document.getElementById('modal-img');
+  img.style.transform='translate('+mTx+'px,'+mTy+'px) scale('+mScale+')';
+  img.style.imageRendering=mScale>=1?'pixelated':'auto';
 }
 function openModal(id){
   focused=id;mScale=1;mTx=0;mTy=0;
@@ -168,11 +170,11 @@ function connect(){
     // 시간 업데이트
     var th=document.querySelector('#card_'+id+' .card-time');
     if(th) th.textContent=timeStr();
-    var img=cards[id];
     var blob=new Blob([jpeg],{type:'image/jpeg'});
     var url=URL.createObjectURL(blob);
+    var img=cards[id];
     if(img._prev) URL.revokeObjectURL(img._prev);
-    img._prev=url;img.src=url;
+    img._prev=url; img.src=url; img.decoding='async';
     if(focused===id){
       var mimg=document.getElementById('modal-img');
       var blob2=new Blob([jpeg],{type:'image/jpeg'});
@@ -180,6 +182,7 @@ function connect(){
       if(mimg._prev) URL.revokeObjectURL(mimg._prev);
       mimg._prev=url2;
       var wasFirst=!mimg.naturalWidth;
+      mimg.decoding='async';
       mimg.onload=function(){if(wasFirst)fitModal();};
       mimg.src=url2;
     }

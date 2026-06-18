@@ -36,7 +36,7 @@ h1{font-size:15px;color:#00c8f0}
 #modal-close{margin-left:auto;background:#444;color:#eee;border:none;padding:4px 14px;border-radius:4px;cursor:pointer;font-size:13px}
 #modal-wrap{flex:1;overflow:hidden;position:relative;cursor:grab;touch-action:none}
 #modal-wrap.dragging{cursor:grabbing}
-#modal-img{position:absolute;top:0;left:0;transform-origin:top left;image-rendering:high-quality;image-rendering:-webkit-optimize-contrast;max-width:none}
+#modal-img{position:absolute;max-width:none;max-height:none}
 </style></head><body>
 <header>
   <h1>Why So Serious</h1>
@@ -82,17 +82,22 @@ function insertCard(el,id){
 // ── 모달
 var mScale=1,mTx=0,mTy=0,mDrag=false,mOx,mOy,pinchDist=0;
 var mImg=document.getElementById('modal-img');
-var mBack=new Image(); // 백버퍼
 var mFirstFrame=true;
 
 function fitModal(){
   var wrap=document.getElementById('modal-wrap');
   var ww=wrap.clientWidth,wh=wrap.clientHeight;
   var iw=mImg.naturalWidth||ww,ih=mImg.naturalHeight||wh;
-  mScale=Math.min(ww/iw,wh/ih);mTx=0;mTy=0;applyModal();
+  mScale=Math.min(ww/iw,wh/ih);
+  mTx=(ww-iw*mScale)/2; mTy=(wh-ih*mScale)/2;
+  applyModal();
 }
 function applyModal(){
-  mImg.style.transform='translate('+mTx+'px,'+mTy+'px) scale('+mScale+')';
+  var iw=mImg.naturalWidth,ih=mImg.naturalHeight;
+  if(!iw||!ih) return;
+  var dw=iw*mScale,dh=ih*mScale;
+  mImg.style.width=dw+'px'; mImg.style.height=dh+'px';
+  mImg.style.left=mTx+'px'; mImg.style.top=mTy+'px';
 }
 function openModal(id){
   focused=id;mScale=1;mTx=0;mTy=0;mFirstFrame=true;
@@ -102,7 +107,7 @@ function openModal(id){
 function closeModal(){
   focused=null;
   document.getElementById('modal').classList.remove('open');
-  mImg.src=''; mBack.src='';
+  mImg.src='';
 }
 var mw=document.getElementById('modal-wrap');
 mw.addEventListener('wheel',function(e){

@@ -27,7 +27,7 @@ h1{font-size:15px;color:#00c8f0}
 .card-time{font-size:10px;color:#556}
 .card-dot{width:7px;height:7px;border-radius:50%;background:#22c55e;flex-shrink:0;margin-left:6px}
 .card.offline .card-dot{background:#555}
-.card canvas{width:100%;display:block}
+.card canvas{width:100%;display:block;image-rendering:auto;image-rendering:-webkit-optimize-contrast;image-rendering:high-quality}
 #modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.95);z-index:999;flex-direction:column}
 #modal.open{display:flex}
 #modal-header{background:#1e2538;padding:10px 16px;display:flex;align-items:center;gap:12px;flex-shrink:0}
@@ -138,10 +138,14 @@ mw.addEventListener('touchend',function(e){if(e.touches.length===0)mDrag=false;}
 document.addEventListener('keydown',function(e){if(e.key==='Escape')closeModal();});
 
 // ── 프레임을 canvas에 그리기 (번쩍임 없음)
+function setCtxQuality(ctx){
+  ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality='high';
+}
 function drawFrame(jpeg, canvas, ctx) {
   createImageBitmap(new Blob([jpeg],{type:'image/jpeg'})).then(function(bmp){
     if(canvas.width!==bmp.width||canvas.height!==bmp.height){
       canvas.width=bmp.width; canvas.height=bmp.height;
+      setCtxQuality(ctx);
     }
     ctx.drawImage(bmp,0,0);
     bmp.close();
@@ -184,6 +188,7 @@ function connect(){
       createImageBitmap(new Blob([jpeg],{type:'image/jpeg'})).then(function(bmp){
         if(mCanvas.width!==bmp.width||mCanvas.height!==bmp.height){
           mCanvas.width=bmp.width; mCanvas.height=bmp.height;
+          setCtxQuality(mCtx);
           if(mFirstFrame){mFirstFrame=false;fitModal();}
         }
         mCtx.drawImage(bmp,0,0); bmp.close();

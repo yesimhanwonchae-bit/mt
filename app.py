@@ -26,8 +26,9 @@ h1{font-size:15px;color:#00c8f0}
 #modal-header{background:#1e2538;padding:10px 16px;display:flex;align-items:center;gap:12px;flex-shrink:0}
 #modal-title{font-size:14px;color:#00c8f0}
 #modal-close{margin-left:auto;background:#444;color:#eee;border:none;padding:4px 14px;border-radius:4px;cursor:pointer;font-size:13px}
-#modal-wrap{flex:1;display:flex;align-items:center;justify-content:center;overflow:hidden;padding:8px}
-#modal-img{max-width:100%;max-height:100%;object-fit:contain}
+#modal-wrap{flex:1;overflow:hidden;position:relative;cursor:grab}
+#modal-wrap.dragging{cursor:grabbing}
+#modal-img{position:absolute;top:0;left:0;transform-origin:top left;image-rendering:pixelated;max-width:none}
 </style></head><body>
 <header><span id="status">연결 중...</span></header>
 <div class="grid" id="grid"></div>
@@ -42,8 +43,21 @@ h1{font-size:15px;color:#00c8f0}
 var cards = {};
 var focused = null;
 
+var mScale=1, mTx=0, mTy=0, mDrag=false, mOx, mOy;
+function fitModal() {
+  var wrap = document.getElementById('modal-wrap');
+  var img = document.getElementById('modal-img');
+  var ww=wrap.clientWidth, wh=wrap.clientHeight;
+  var iw=img.naturalWidth||ww, ih=img.naturalHeight||wh;
+  mScale=Math.min(ww/iw, wh/ih); mTx=0; mTy=0; applyModal();
+}
+function applyModal() {
+  var img=document.getElementById('modal-img');
+  img.style.transform='translate('+mTx+'px,'+mTy+'px) scale('+mScale+')';
+}
 function openModal(clientId) {
   focused = clientId;
+  mScale=1; mTx=0; mTy=0;
   document.getElementById('modal-title').textContent = clientId;
   document.getElementById('modal').classList.add('open');
 }
@@ -52,6 +66,18 @@ function closeModal() {
   document.getElementById('modal').classList.remove('open');
   document.getElementById('modal-img').src = '';
 }
+document.getElementById('modal-wrap').addEventListener('wheel', function(e){
+  e.preventDefault();
+  var wrap=document.getElementById('modal-wrap');
+  var r=wrap.getBoundingClientRect(), mx=e.clientX-r.left, my=e.clientY-r.top;
+  var d=e.deltaY<0?1.15:1/1.15;
+  mTx=mx-(mx-mTx)*d; mTy=my-(my-mTy)*d; mScale*=d;
+  if(mScale<0.05)mScale=0.05; if(mScale>30)mScale=30; applyModal();
+},{passive:false});
+document.getElementById('modal-wrap').addEventListener('mousedown',function(e){mDrag=true;mOx=e.clientX-mTx;mOy=e.clientY-mTy;document.getElementById('modal-wrap').classList.add('dragging');});
+document.addEventListener('mousemove',function(e){if(!mDrag)return;mTx=e.clientX-mOx;mTy=e.clientY-mOy;applyModal();});
+document.addEventListener('mouseup',function(){mDrag=false;document.getElementById('modal-wrap').classList.remove('dragging');});
+document.getElementById('modal-wrap').addEventListener('dblclick',function(){fitModal();});
 document.addEventListener('keydown', function(e){ if(e.key==='Escape') closeModal(); });
 
 function connect() {
@@ -87,6 +113,8 @@ function connect() {
       var url2 = URL.createObjectURL(blob2);
       if (mimg._prev) URL.revokeObjectURL(mimg._prev);
       mimg._prev = url2;
+      var wasFirst = !mimg.src || mimg.src === window.location.href;
+      mimg.onload = function(){ if(wasFirst) fitModal(); };
       mimg.src = url2;
     }
   };

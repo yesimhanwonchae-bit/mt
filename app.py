@@ -27,7 +27,7 @@ h1{font-size:15px;color:#00c8f0}
 .card-time{font-size:10px;color:#556}
 .card-dot{width:7px;height:7px;border-radius:50%;background:#22c55e;flex-shrink:0;margin-left:6px}
 .card.offline .card-dot{background:#555}
-.card img{width:100%;display:block;image-rendering:auto;image-rendering:-webkit-optimize-contrast}
+.card canvas{width:100%;display:block}
 #modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.95);z-index:999;flex-direction:column}
 #modal.open{display:flex}
 #modal-header{background:#1e2538;padding:10px 16px;display:flex;align-items:center;gap:12px;flex-shrink:0}
@@ -36,7 +36,7 @@ h1{font-size:15px;color:#00c8f0}
 #modal-close{margin-left:auto;background:#444;color:#eee;border:none;padding:4px 14px;border-radius:4px;cursor:pointer;font-size:13px}
 #modal-wrap{flex:1;overflow:hidden;position:relative;cursor:grab;touch-action:none}
 #modal-wrap.dragging{cursor:grabbing}
-#modal-img{position:absolute;top:0;left:0;transform-origin:top left;image-rendering:auto;max-width:none;will-change:transform}
+#modal-canvas{position:absolute;top:0;left:0;transform-origin:top left;image-rendering:auto;max-width:none;will-change:transform}
 </style></head><body>
 <header>
   <h1>Why So Serious</h1>
@@ -49,66 +49,61 @@ h1{font-size:15px;color:#00c8f0}
     <span id="modal-hint">휠: 확대 | 드래그: 이동 | 더블탭: 초기화 | ESC: 닫기</span>
     <button id="modal-close" onclick="closeModal()">닫기 ✕</button>
   </div>
-  <div id="modal-wrap"><img id="modal-img"></div>
+  <div id="modal-wrap"><canvas id="modal-canvas"></canvas></div>
 </div>
 <script>
 var cards={}, lastSeen={}, focused=null, pcCount=0;
+// cards[id] = {canvas, ctx, bmp} — canvas 기반으로 번쩍임 제거
 
-// ── 오프라인 감지 (5초 무신호시 오프라인 표시)
+// ── 오프라인 감지
 setInterval(function(){
   var now=Date.now();
   Object.keys(lastSeen).forEach(function(id){
     var card=document.getElementById('card_'+id);
     if(!card) return;
-    if(now-lastSeen[id]>5000) card.classList.add('offline');
-    else card.classList.remove('offline');
+    card.classList.toggle('offline', now-lastSeen[id]>5000);
   });
 },1000);
 
-// ── 시간 포맷
 function timeStr(){
   var d=new Date();
   return d.getHours().toString().padStart(2,'0')+':'+d.getMinutes().toString().padStart(2,'0')+':'+d.getSeconds().toString().padStart(2,'0');
 }
 
-// ── 카드 그룹 정렬 (같은 hostname끼리 나란히)
 function groupKey(id){ return id.replace(/_\d+$/,''); }
-function insertCard(el, id){
+function insertCard(el,id){
   var grid=document.getElementById('grid');
   var gk=groupKey(id);
-  var siblings=Array.from(grid.children).filter(function(c){ return groupKey(c.dataset.id||'')===gk; });
-  if(siblings.length>0){
-    var last=siblings[siblings.length-1];
-    last.after(el);
-  } else {
-    grid.appendChild(el);
-  }
+  var siblings=Array.from(grid.children).filter(function(c){return groupKey(c.dataset.id||'')===gk;});
+  if(siblings.length>0) siblings[siblings.length-1].after(el);
+  else grid.appendChild(el);
 }
 
-// ── 모달 줌/드래그
-var mScale=1,mTx=0,mTy=0,mDrag=false,mOx,mOy;
-var pinchDist=0;
+// ── 모달 캔버스
+var mScale=1,mTx=0,mTy=0,mDrag=false,mOx,mOy,pinchDist=0;
+var mCanvas=document.getElementById('modal-canvas');
+var mCtx=mCanvas.getContext('2d');
+var mBmp=null, mFirstFrame=true;
+
 function fitModal(){
   var wrap=document.getElementById('modal-wrap');
-  var img=document.getElementById('modal-img');
   var ww=wrap.clientWidth,wh=wrap.clientHeight;
-  var iw=img.naturalWidth||ww,ih=img.naturalHeight||wh;
+  var iw=mCanvas.width||ww,ih=mCanvas.height||wh;
   mScale=Math.min(ww/iw,wh/ih);mTx=0;mTy=0;applyModal();
 }
 function applyModal(){
-  var img=document.getElementById('modal-img');
-  img.style.transform='translate('+mTx+'px,'+mTy+'px) scale('+mScale+')';
-  img.style.imageRendering=mScale>=1?'pixelated':'auto';
+  mCanvas.style.transform='translate('+mTx+'px,'+mTy+'px) scale('+mScale+')';
+  mCanvas.style.imageRendering=mScale>=1?'pixelated':'auto';
 }
 function openModal(id){
-  focused=id;mScale=1;mTx=0;mTy=0;
+  focused=id;mScale=1;mTx=0;mTy=0;mFirstFrame=true;
   document.getElementById('modal-title').textContent=id;
   document.getElementById('modal').classList.add('open');
 }
 function closeModal(){
   focused=null;
   document.getElementById('modal').classList.remove('open');
-  document.getElementById('modal-img').src='';
+  mCtx.clearRect(0,0,mCanvas.width,mCanvas.height);
 }
 var mw=document.getElementById('modal-wrap');
 mw.addEventListener('wheel',function(e){
@@ -122,7 +117,6 @@ mw.addEventListener('mousedown',function(e){mDrag=true;mOx=e.clientX-mTx;mOy=e.c
 document.addEventListener('mousemove',function(e){if(!mDrag)return;mTx=e.clientX-mOx;mTy=e.clientY-mOy;applyModal();});
 document.addEventListener('mouseup',function(){mDrag=false;mw.classList.remove('dragging');});
 mw.addEventListener('dblclick',function(){fitModal();});
-// 터치 드래그
 mw.addEventListener('touchstart',function(e){
   if(e.touches.length===1){mDrag=true;mOx=e.touches[0].clientX-mTx;mOy=e.touches[0].clientY-mTy;}
   if(e.touches.length===2){mDrag=false;pinchDist=Math.hypot(e.touches[0].clientX-e.touches[1].clientX,e.touches[0].clientY-e.touches[1].clientY);}
@@ -142,6 +136,17 @@ mw.addEventListener('touchmove',function(e){
 },{passive:false});
 mw.addEventListener('touchend',function(e){if(e.touches.length===0)mDrag=false;},{passive:false});
 document.addEventListener('keydown',function(e){if(e.key==='Escape')closeModal();});
+
+// ── 프레임을 canvas에 그리기 (번쩍임 없음)
+function drawFrame(jpeg, canvas, ctx) {
+  createImageBitmap(new Blob([jpeg],{type:'image/jpeg'})).then(function(bmp){
+    if(canvas.width!==bmp.width||canvas.height!==bmp.height){
+      canvas.width=bmp.width; canvas.height=bmp.height;
+    }
+    ctx.drawImage(bmp,0,0);
+    bmp.close();
+  });
+}
 
 // ── WebSocket
 function connect(){
@@ -163,28 +168,25 @@ function connect(){
       var d=document.createElement('div');
       d.className='card';d.id='card_'+id;d.dataset.id=id;
       d.onclick=function(){openModal(id);};
-      d.innerHTML='<div class="card-header"><span class="card-name">'+id+'</span><span class="card-time">--:--:--</span><span class="card-dot"></span></div><img id="img_'+id+'">';
+      var cv=document.createElement('canvas');
+      cv.id='cv_'+id;
+      d.innerHTML='<div class="card-header"><span class="card-name">'+id+'</span><span class="card-time">--:--:--</span><span class="card-dot"></span></div>';
+      d.appendChild(cv);
       insertCard(d,id);
-      cards[id]=document.getElementById('img_'+id);
+      cards[id]={canvas:cv, ctx:cv.getContext('2d')};
     }
-    // 시간 업데이트
     var th=document.querySelector('#card_'+id+' .card-time');
     if(th) th.textContent=timeStr();
-    var blob=new Blob([jpeg],{type:'image/jpeg'});
-    var url=URL.createObjectURL(blob);
-    var img=cards[id];
-    if(img._prev) URL.revokeObjectURL(img._prev);
-    img._prev=url; img.src=url; img.decoding='async';
+    var c=cards[id];
+    drawFrame(jpeg, c.canvas, c.ctx);
     if(focused===id){
-      var mimg=document.getElementById('modal-img');
-      var blob2=new Blob([jpeg],{type:'image/jpeg'});
-      var url2=URL.createObjectURL(blob2);
-      if(mimg._prev) URL.revokeObjectURL(mimg._prev);
-      mimg._prev=url2;
-      var wasFirst=!mimg.naturalWidth;
-      mimg.decoding='async';
-      mimg.onload=function(){if(wasFirst)fitModal();};
-      mimg.src=url2;
+      createImageBitmap(new Blob([jpeg],{type:'image/jpeg'})).then(function(bmp){
+        if(mCanvas.width!==bmp.width||mCanvas.height!==bmp.height){
+          mCanvas.width=bmp.width; mCanvas.height=bmp.height;
+          if(mFirstFrame){mFirstFrame=false;fitModal();}
+        }
+        mCtx.drawImage(bmp,0,0); bmp.close();
+      });
     }
   };
   ws.onclose=function(){

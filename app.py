@@ -27,9 +27,7 @@ h1{font-size:15px;color:#00c8f0}
 .card-time{font-size:10px;color:#556}
 .card-dot{width:7px;height:7px;border-radius:50%;background:#22c55e;flex-shrink:0;margin-left:6px}
 .card.offline .card-dot{background:#555}
-.card-img-wrap{position:relative;width:100%;overflow:hidden;line-height:0}
-.card-img-wrap img{width:100%;display:block;position:absolute;top:0;left:0;image-rendering:auto;image-rendering:-webkit-optimize-contrast}
-.card-img-wrap img.active{position:relative}
+.card img{width:100%;display:block}
 #modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.95);z-index:999;flex-direction:column}
 #modal.open{display:flex}
 #modal-header{background:#1e2538;padding:10px 16px;display:flex;align-items:center;gap:12px;flex-shrink:0}
@@ -55,7 +53,7 @@ h1{font-size:15px;color:#00c8f0}
 </div>
 <script>
 var cards={}, lastSeen={}, focused=null, pcCount=0;
-// cards[id] = {a, b, cur} — 더블버퍼링 img로 번쩍임 제거
+// cards[id] = img element
 
 // ── 오프라인 감지
 setInterval(function(){
@@ -139,17 +137,17 @@ mw.addEventListener('touchmove',function(e){
 mw.addEventListener('touchend',function(e){if(e.touches.length===0)mDrag=false;},{passive:false});
 document.addEventListener('keydown',function(e){if(e.key==='Escape')closeModal();});
 
-// ── 더블버퍼링 img 업데이트
-function updateCard(jpeg, card){
-  var url=URL.createObjectURL(new Blob([jpeg],{type:'image/jpeg'}));
-  card.back.onload=function(){
-    var oldUrl=card.front._url;
-    card.front.src=card.back.src;
-    card.front._url=card.back.src;
-    card.back.src='';
+// ── img 업데이트 (로드 완료 후 이전 URL 해제 → 번쩍임 없음)
+function updateImg(img, jpeg, onFirst){
+  var blob=new Blob([jpeg],{type:'image/jpeg'});
+  var url=URL.createObjectURL(blob);
+  var oldUrl=img._url||null;
+  img.onload=function(){
     if(oldUrl) URL.revokeObjectURL(oldUrl);
+    if(onFirst) onFirst();
   };
-  card.back.src=url;
+  img._url=url;
+  img.src=url;
 }
 
 // ── WebSocket
@@ -172,28 +170,19 @@ function connect(){
       var d=document.createElement('div');
       d.className='card';d.id='card_'+id;d.dataset.id=id;
       d.onclick=function(){openModal(id);};
-      var wrap=document.createElement('div');wrap.className='card-img-wrap';
-      var imgA=new Image();imgA.className='active';
-      var imgB=new Image();
-      wrap.appendChild(imgA);
+      var img=document.createElement('img');
       d.innerHTML='<div class="card-header"><span class="card-name">'+id+'</span><span class="card-time">--:--:--</span><span class="card-dot"></span></div>';
-      d.appendChild(wrap);
+      d.appendChild(img);
       insertCard(d,id);
-      cards[id]={front:imgA, back:imgB};
+      cards[id]=img;
     }
     var th=document.querySelector('#card_'+id+' .card-time');
     if(th) th.textContent=timeStr();
-    updateCard(jpeg, cards[id]);
+    updateImg(cards[id], jpeg, null);
     if(focused===id){
-      var url2=URL.createObjectURL(new Blob([jpeg],{type:'image/jpeg'}));
-      mBack.onload=function(){
-        var oldUrl=mImg._url;
-        mImg.src=mBack.src; mImg._url=mBack.src;
-        mBack.src='';
-        if(oldUrl) URL.revokeObjectURL(oldUrl);
-        if(mFirstFrame){mFirstFrame=false;fitModal();}
-      };
-      mBack.src=url2;
+      var isFirst=mFirstFrame;
+      if(isFirst) mFirstFrame=false;
+      updateImg(mImg, jpeg, isFirst?fitModal:null);
     }
   };
   ws.onclose=function(){

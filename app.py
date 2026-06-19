@@ -6,12 +6,18 @@ from fastapi.responses import HTMLResponse
 
 app = FastAPI()
 
-senders: dict = {}          # client_id -> WebSocket
-viewers: dict = {}          # viewer WebSocket -> set of subscribed client_ids
-sender_last_frame: dict = {}  # client_id -> latest jpeg bytes (thumbnail용)
+senders: dict = {}              # client_id -> WebSocket
+viewers: dict = {}              # viewer WebSocket -> set of subscribed client_ids
+sender_last_frame: dict = {}    # client_id -> latest jpeg bytes
+known_pcs: dict = {}            # client_id -> {"online": bool}
+global_wanted: set = set()      # union of all viewer subscriptions
 
-async def broadcast_pc_list():
-    msg = json.dumps({"type": "pc_list", "ids": list(senders.keys())})
+def update_global_wanted():
+    global_wanted.clear()
+    for subs in viewers.values():
+        global_wanted.update(subs)
+
+async def notify_viewers_text(msg: str):
     for v in list(viewers):
         try:
             await v.send_text(msg)
@@ -30,7 +36,7 @@ h1{font-size:15px;color:#00c8f0}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:8px;padding:8px;flex:1}
 .card{background:#1a1a2e;border:1px solid #333;border-radius:6px;overflow:hidden;cursor:pointer;transition:border-color .2s,opacity .3s}
 .card:hover{border-color:#00c8f0}
-.card.offline{opacity:.4;border-color:#555}
+.card.offline{opacity:.4;cursor:default}
 .card-header{background:#1e2538;padding:10px 14px;font-size:13px;color:#cdd;display:flex;justify-content:space-between;align-items:center}
 .card-name{font-weight:bold}
 .card-dot{width:7px;height:7px;border-radius:50%;background:#22c55e;flex-shrink:0;margin-left:6px}
@@ -45,6 +51,7 @@ h1{font-size:15px;color:#00c8f0}
 #modal-wrap{flex:1;overflow:hidden;position:relative;cursor:grab;touch-action:none}
 #modal-wrap.dragging{cursor:grabbing}
 #modal-img{position:absolute;max-width:none;max-height:none}
+#modal-loading{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);color:#94a3b8;font-size:13px}
 </style></head><body>
 <header>
   <h1>Why So Serious</h1>
@@ -57,24 +64,13 @@ h1{font-size:15px;color:#00c8f0}
     <span id="modal-hint">휠: 확대 | 드래그: 이동 | 더블탭: 초기화 | ESC: 닫기</span>
     <button id="modal-close" onclick="closeModal()">닫기 ✕</button>
   </div>
-  <div id="modal-wrap"><img id="modal-img"></div>
+  <div id="modal-wrap">
+    <div id="modal-loading">연결 중...</div>
+    <img id="modal-img">
+  </div>
 </div>
 <script>
-var cards={}, lastSeen={}, focused=null, pcCount=0, ws=null;
-
-setInterval(function(){
-  var now=Date.now();
-  Object.keys(lastSeen).forEach(function(id){
-    var card=document.getElementById('card_'+id);
-    if(!card) return;
-    card.classList.toggle('offline', now-lastSeen[id]>8000);
-  });
-},1000);
-
-function timeStr(){
-  var d=new Date();
-  return d.getHours().toString().padStart(2,'0')+':'+d.getMinutes().toString().padStart(2,'0')+':'+d.getSeconds().toString().padStart(2,'0');
-}
+var cards={}, focused=null, pcCount=0, ws=null;
 
 function groupKey(id){ return id.replace(/_\\d+$/,''); }
 function insertCard(el,id){
@@ -85,25 +81,32 @@ function insertCard(el,id){
   else grid.appendChild(el);
 }
 
-function addCard(id){
-  if(cards[id]) return;
+function addCard(id, online){
+  if(cards[id]){
+    setOnline(id, online);
+    return;
+  }
   pcCount++;
   document.getElementById('pc-count').textContent='PC '+pcCount+'대';
   var d=document.createElement('div');
-  d.className='card';d.id='card_'+id;d.dataset.id=id;
+  d.className='card'+(online?'':' offline');
+  d.id='card_'+id; d.dataset.id=id;
   d.innerHTML='<div class="card-header"><span class="card-name">'+id+'</span><span class="card-dot"></span></div>'
-             +'<div class="card-hint">클릭해서 보기</div>';
-  d.onclick=function(){ openModal(id); };
+             +'<div class="card-hint">'+(online?'클릭해서 보기':'오프라인')+'</div>';
+  d.onclick=function(){
+    if(d.classList.contains('offline')) return;
+    openModal(id);
+  };
   insertCard(d,id);
   cards[id]=true;
-  lastSeen[id]=Date.now();
 }
 
-function removeCard(id){
+function setOnline(id, online){
   var el=document.getElementById('card_'+id);
-  if(el){ el.remove(); pcCount--; document.getElementById('pc-count').textContent='PC '+pcCount+'대'; }
-  delete cards[id];
-  delete lastSeen[id];
+  if(!el) return;
+  el.classList.toggle('offline',!online);
+  var hint=el.querySelector('.card-hint');
+  if(hint) hint.textContent=online?'클릭해서 보기':'오프라인';
 }
 
 // ── 모달
@@ -127,6 +130,8 @@ function applyModal(){
 }
 function openModal(id){
   focused=id; mScale=1; mTx=0; mTy=0; mFirstFrame=true;
+  mImg.src=''; mImg.style.width=''; mImg.style.height='';
+  document.getElementById('modal-loading').style.display='block';
   document.getElementById('modal-title').textContent=id;
   document.getElementById('modal').classList.add('open');
   if(ws && ws.readyState===1) ws.send(JSON.stringify({type:'sub',id:id}));
@@ -187,11 +192,10 @@ function connect(){
     if(typeof e.data==='string'){
       var msg=JSON.parse(e.data);
       if(msg.type==='pc_list'){
-        msg.ids.forEach(function(id){ addCard(id); });
-      } else if(msg.type==='pc_join'){
-        addCard(msg.id);
-      } else if(msg.type==='pc_leave'){
-        removeCard(msg.id);
+        msg.pcs.forEach(function(p){ addCard(p.id, p.online); });
+      } else if(msg.type==='pc_status'){
+        if(!cards[msg.id]) addCard(msg.id, msg.online);
+        else setOnline(msg.id, msg.online);
       }
       return;
     }
@@ -200,8 +204,8 @@ function connect(){
     if(sep<0) return;
     var id=new TextDecoder().decode(buf.slice(0,sep));
     var jpeg=buf.slice(sep+1);
-    lastSeen[id]=Date.now();
     if(focused===id){
+      document.getElementById('modal-loading').style.display='none';
       var isFirst=mFirstFrame;
       if(isFirst) mFirstFrame=false;
       updateImg(mImg,jpeg,isFirst?fitModal:null);
@@ -226,18 +230,17 @@ async def ws_sender(ws: WebSocket, client_id: str):
     await ws.accept()
     senders[client_id] = ws
     sender_last_frame[client_id] = b""
-    await broadcast_pc_list()
-    # join 알림
-    join_msg = json.dumps({"type": "pc_join", "id": client_id})
-    for v in list(viewers):
-        try:
-            await v.send_text(join_msg)
-        except Exception:
-            pass
+    known_pcs[client_id] = {"online": True}
+    await notify_viewers_text(json.dumps({"type": "pc_status", "id": client_id, "online": True}))
     try:
         while True:
             frame = await ws.receive_bytes()
             sender_last_frame[client_id] = frame
+
+            if client_id not in global_wanted:
+                # 아무도 안 보고 있으면 연결 끊기
+                break
+
             header = (client_id + "|").encode("utf-8")
             payload = header + frame
             dead = []
@@ -249,24 +252,25 @@ async def ws_sender(ws: WebSocket, client_id: str):
                         dead.append(v)
             for d in dead:
                 viewers.pop(d, None)
+                update_global_wanted()
     except (WebSocketDisconnect, Exception):
-        senders.pop(client_id, None)
-        sender_last_frame.pop(client_id, None)
-        leave_msg = json.dumps({"type": "pc_leave", "id": client_id})
-        for v in list(viewers):
-            try:
-                await v.send_text(leave_msg)
-            except Exception:
-                pass
+        pass
+
+    senders.pop(client_id, None)
+    if client_id in known_pcs:
+        known_pcs[client_id]["online"] = False
+    await notify_viewers_text(json.dumps({"type": "pc_status", "id": client_id, "online": False}))
 
 
 @app.websocket("/ws/viewer")
 async def ws_viewer(ws: WebSocket):
     await ws.accept()
     viewers[ws] = set()
-    # 현재 연결된 PC 목록 전송
     try:
-        await ws.send_text(json.dumps({"type": "pc_list", "ids": list(senders.keys())}))
+        await ws.send_text(json.dumps({
+            "type": "pc_list",
+            "pcs": [{"id": k, "online": v["online"]} for k, v in known_pcs.items()]
+        }))
     except Exception:
         pass
     try:
@@ -277,7 +281,8 @@ async def ws_viewer(ws: WebSocket):
                 if data.get("type") == "sub":
                     pid = data.get("id", "")
                     viewers[ws].add(pid)
-                    # 최신 프레임 즉시 전송 (첫 화면 빠르게)
+                    update_global_wanted()
+                    # 최신 프레임 즉시 전송
                     if pid in sender_last_frame and sender_last_frame[pid]:
                         header = (pid + "|").encode("utf-8")
                         try:
@@ -285,7 +290,15 @@ async def ws_viewer(ws: WebSocket):
                         except Exception:
                             pass
                 elif data.get("type") == "unsub":
-                    viewers[ws].discard(data.get("id", ""))
+                    pid = data.get("id", "")
+                    viewers[ws].discard(pid)
+                    update_global_wanted()
+                    # 아무도 안 보면 sender 연결 끊기
+                    if pid not in global_wanted and pid in senders:
+                        try:
+                            await senders[pid].close()
+                        except Exception:
+                            pass
             except asyncio.TimeoutError:
                 try:
                     await ws.send_text("ping")
@@ -293,7 +306,16 @@ async def ws_viewer(ws: WebSocket):
                     break
     except (WebSocketDisconnect, Exception):
         pass
+
     viewers.pop(ws, None)
+    update_global_wanted()
+    # 이 뷰어가 보던 PC 중 아무도 안 보는 것들 연결 끊기
+    for pid in list(senders.keys()):
+        if pid not in global_wanted:
+            try:
+                await senders[pid].close()
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":

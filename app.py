@@ -1,12 +1,22 @@
 import asyncio
+import json
 import os
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 
 app = FastAPI()
 
-senders: dict = {}   # client_id -> WebSocket
-viewers: set = set() # viewer WebSockets
+senders: dict = {}          # client_id -> WebSocket
+viewers: dict = {}          # viewer WebSocket -> set of subscribed client_ids
+sender_last_frame: dict = {}  # client_id -> latest jpeg bytes (thumbnail용)
+
+async def broadcast_pc_list():
+    msg = json.dumps({"type": "pc_list", "ids": list(senders.keys())})
+    for v in list(viewers):
+        try:
+            await v.send_text(msg)
+        except Exception:
+            pass
 
 VIEWER_HTML = """<!DOCTYPE html><html><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -17,17 +27,15 @@ body{background:#111;color:#eee;font-family:sans-serif;min-height:100vh;display:
 header{background:#1e2538;padding:10px 16px;display:flex;align-items:center;gap:12px;flex-shrink:0}
 h1{font-size:15px;color:#00c8f0}
 #info{font-size:12px;color:#94a3b8;margin-left:auto;display:flex;gap:12px}
-.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(420px,1fr));gap:8px;padding:8px;flex:1}
-.group{display:contents}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:8px;padding:8px;flex:1}
 .card{background:#1a1a2e;border:1px solid #333;border-radius:6px;overflow:hidden;cursor:pointer;transition:border-color .2s,opacity .3s}
 .card:hover{border-color:#00c8f0}
 .card.offline{opacity:.4;border-color:#555}
-.card-header{background:#1e2538;padding:6px 10px;font-size:12px;color:#94a3b8;display:flex;justify-content:space-between;align-items:center}
-.card-name{font-weight:bold;color:#cdd}
-.card-time{font-size:10px;color:#556}
+.card-header{background:#1e2538;padding:10px 14px;font-size:13px;color:#cdd;display:flex;justify-content:space-between;align-items:center}
+.card-name{font-weight:bold}
 .card-dot{width:7px;height:7px;border-radius:50%;background:#22c55e;flex-shrink:0;margin-left:6px}
 .card.offline .card-dot{background:#555}
-.card img{width:100%;display:block}
+.card-hint{font-size:11px;color:#556;padding:18px;text-align:center}
 #modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.95);z-index:999;flex-direction:column}
 #modal.open{display:flex}
 #modal-header{background:#1e2538;padding:10px 16px;display:flex;align-items:center;gap:12px;flex-shrink:0}
@@ -52,16 +60,14 @@ h1{font-size:15px;color:#00c8f0}
   <div id="modal-wrap"><img id="modal-img"></div>
 </div>
 <script>
-var cards={}, lastSeen={}, focused=null, pcCount=0;
-// cards[id] = img element
+var cards={}, lastSeen={}, focused=null, pcCount=0, ws=null;
 
-// ── 오프라인 감지
 setInterval(function(){
   var now=Date.now();
   Object.keys(lastSeen).forEach(function(id){
     var card=document.getElementById('card_'+id);
     if(!card) return;
-    card.classList.toggle('offline', now-lastSeen[id]>5000);
+    card.classList.toggle('offline', now-lastSeen[id]>8000);
   });
 },1000);
 
@@ -70,13 +76,34 @@ function timeStr(){
   return d.getHours().toString().padStart(2,'0')+':'+d.getMinutes().toString().padStart(2,'0')+':'+d.getSeconds().toString().padStart(2,'0');
 }
 
-function groupKey(id){ return id.replace(/_\d+$/,''); }
+function groupKey(id){ return id.replace(/_\\d+$/,''); }
 function insertCard(el,id){
   var grid=document.getElementById('grid');
   var gk=groupKey(id);
   var siblings=Array.from(grid.children).filter(function(c){return groupKey(c.dataset.id||'')===gk;});
   if(siblings.length>0) siblings[siblings.length-1].after(el);
   else grid.appendChild(el);
+}
+
+function addCard(id){
+  if(cards[id]) return;
+  pcCount++;
+  document.getElementById('pc-count').textContent='PC '+pcCount+'대';
+  var d=document.createElement('div');
+  d.className='card';d.id='card_'+id;d.dataset.id=id;
+  d.innerHTML='<div class="card-header"><span class="card-name">'+id+'</span><span class="card-dot"></span></div>'
+             +'<div class="card-hint">클릭해서 보기</div>';
+  d.onclick=function(){ openModal(id); };
+  insertCard(d,id);
+  cards[id]=true;
+  lastSeen[id]=Date.now();
+}
+
+function removeCard(id){
+  var el=document.getElementById('card_'+id);
+  if(el){ el.remove(); pcCount--; document.getElementById('pc-count').textContent='PC '+pcCount+'대'; }
+  delete cards[id];
+  delete lastSeen[id];
 }
 
 // ── 모달
@@ -95,20 +122,22 @@ function fitModal(){
 function applyModal(){
   var iw=mImg.naturalWidth,ih=mImg.naturalHeight;
   if(!iw||!ih) return;
-  var dw=iw*mScale,dh=ih*mScale;
-  mImg.style.width=dw+'px'; mImg.style.height=dh+'px';
+  mImg.style.width=iw*mScale+'px'; mImg.style.height=ih*mScale+'px';
   mImg.style.left=mTx+'px'; mImg.style.top=mTy+'px';
 }
 function openModal(id){
-  focused=id;mScale=1;mTx=0;mTy=0;mFirstFrame=true;
+  focused=id; mScale=1; mTx=0; mTy=0; mFirstFrame=true;
   document.getElementById('modal-title').textContent=id;
   document.getElementById('modal').classList.add('open');
+  if(ws && ws.readyState===1) ws.send(JSON.stringify({type:'sub',id:id}));
 }
 function closeModal(){
+  if(focused && ws && ws.readyState===1) ws.send(JSON.stringify({type:'unsub',id:focused}));
   focused=null;
   document.getElementById('modal').classList.remove('open');
   mImg.src='';
 }
+
 var mw=document.getElementById('modal-wrap');
 mw.addEventListener('wheel',function(e){
   e.preventDefault();
@@ -141,52 +170,41 @@ mw.addEventListener('touchmove',function(e){
 mw.addEventListener('touchend',function(e){if(e.touches.length===0)mDrag=false;},{passive:false});
 document.addEventListener('keydown',function(e){if(e.key==='Escape')closeModal();});
 
-// ── img 업데이트 (로드 완료 후 이전 URL 해제 → 번쩍임 없음)
-function updateImg(img, jpeg, onFirst){
+function updateImg(img,jpeg,onFirst){
   var blob=new Blob([jpeg],{type:'image/jpeg'});
   var url=URL.createObjectURL(blob);
   var oldUrl=img._url||null;
-  img.onload=function(){
-    if(oldUrl) URL.revokeObjectURL(oldUrl);
-    if(onFirst) onFirst();
-  };
-  img._url=url;
-  img.src=url;
+  img.onload=function(){ if(oldUrl) URL.revokeObjectURL(oldUrl); if(onFirst) onFirst(); };
+  img._url=url; img.src=url;
 }
 
-// ── WebSocket
 function connect(){
   var proto=location.protocol==='https:'?'wss:':'ws:';
-  var ws=new WebSocket(proto+'//'+location.host+'/ws/viewer');
+  ws=new WebSocket(proto+'//'+location.host+'/ws/viewer');
   ws.binaryType='arraybuffer';
-  ws.onopen=function(){document.getElementById('ws-status').textContent='연결됨';};
+  ws.onopen=function(){ document.getElementById('ws-status').textContent='연결됨'; };
   ws.onmessage=function(e){
-    if(typeof e.data==='string') return;
+    if(typeof e.data==='string'){
+      var msg=JSON.parse(e.data);
+      if(msg.type==='pc_list'){
+        msg.ids.forEach(function(id){ addCard(id); });
+      } else if(msg.type==='pc_join'){
+        addCard(msg.id);
+      } else if(msg.type==='pc_leave'){
+        removeCard(msg.id);
+      }
+      return;
+    }
     var buf=new Uint8Array(e.data);
     var sep=buf.indexOf(0x7C);
     if(sep<0) return;
     var id=new TextDecoder().decode(buf.slice(0,sep));
     var jpeg=buf.slice(sep+1);
     lastSeen[id]=Date.now();
-    if(!cards[id]){
-      pcCount++;
-      document.getElementById('pc-count').textContent='PC '+pcCount+'대';
-      var d=document.createElement('div');
-      d.className='card';d.id='card_'+id;d.dataset.id=id;
-      d.onclick=function(){openModal(id);};
-      var img=document.createElement('img');
-      d.innerHTML='<div class="card-header"><span class="card-name">'+id+'</span><span class="card-time">--:--:--</span><span class="card-dot"></span></div>';
-      d.appendChild(img);
-      insertCard(d,id);
-      cards[id]=img;
-    }
-    var th=document.querySelector('#card_'+id+' .card-time');
-    if(th) th.textContent=timeStr();
-    updateImg(cards[id], jpeg, null);
     if(focused===id){
       var isFirst=mFirstFrame;
       if(isFirst) mFirstFrame=false;
-      updateImg(mImg, jpeg, isFirst?fitModal:null);
+      updateImg(mImg,jpeg,isFirst?fitModal:null);
     }
   };
   ws.onclose=function(){
@@ -207,37 +225,75 @@ async def root():
 async def ws_sender(ws: WebSocket, client_id: str):
     await ws.accept()
     senders[client_id] = ws
+    sender_last_frame[client_id] = b""
+    await broadcast_pc_list()
+    # join 알림
+    join_msg = json.dumps({"type": "pc_join", "id": client_id})
+    for v in list(viewers):
+        try:
+            await v.send_text(join_msg)
+        except Exception:
+            pass
     try:
         while True:
             frame = await ws.receive_bytes()
+            sender_last_frame[client_id] = frame
             header = (client_id + "|").encode("utf-8")
             payload = header + frame
             dead = []
-            for v in list(viewers):
-                try:
-                    await v.send_bytes(payload)
-                except Exception:
-                    dead.append(v)
+            for v, subs in list(viewers.items()):
+                if client_id in subs:
+                    try:
+                        await v.send_bytes(payload)
+                    except Exception:
+                        dead.append(v)
             for d in dead:
-                viewers.discard(d)
+                viewers.pop(d, None)
     except (WebSocketDisconnect, Exception):
         senders.pop(client_id, None)
+        sender_last_frame.pop(client_id, None)
+        leave_msg = json.dumps({"type": "pc_leave", "id": client_id})
+        for v in list(viewers):
+            try:
+                await v.send_text(leave_msg)
+            except Exception:
+                pass
 
 
 @app.websocket("/ws/viewer")
 async def ws_viewer(ws: WebSocket):
     await ws.accept()
-    viewers.add(ws)
+    viewers[ws] = set()
+    # 현재 연결된 PC 목록 전송
+    try:
+        await ws.send_text(json.dumps({"type": "pc_list", "ids": list(senders.keys())}))
+    except Exception:
+        pass
     try:
         while True:
-            await asyncio.sleep(20)
             try:
-                await ws.send_text("ping")
-            except Exception:
-                break
+                msg = await asyncio.wait_for(ws.receive_text(), timeout=20)
+                data = json.loads(msg)
+                if data.get("type") == "sub":
+                    pid = data.get("id", "")
+                    viewers[ws].add(pid)
+                    # 최신 프레임 즉시 전송 (첫 화면 빠르게)
+                    if pid in sender_last_frame and sender_last_frame[pid]:
+                        header = (pid + "|").encode("utf-8")
+                        try:
+                            await ws.send_bytes(header + sender_last_frame[pid])
+                        except Exception:
+                            pass
+                elif data.get("type") == "unsub":
+                    viewers[ws].discard(data.get("id", ""))
+            except asyncio.TimeoutError:
+                try:
+                    await ws.send_text("ping")
+                except Exception:
+                    break
     except (WebSocketDisconnect, Exception):
         pass
-    viewers.discard(ws)
+    viewers.pop(ws, None)
 
 
 if __name__ == "__main__":
